@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">LLMPerf-apk</string>
+    <string name="register_title">Register Device</string>
+    <string name="hint_device_name">Device name</string>
+    <string name="action_register">Register this device</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_registering">Registering device…</string>
+    <string name="status_fetching_token">Fetching auth token…</string>
+    <string name="status_connected">Registered: %1$s</string>
+    <string name="status_error">Error: %1$s</string>
+    <string name="ws_status_connecting">WebSocket: connecting…</string>
+    <string name="ws_status_connected">WebSocket: %1$s</string>
+    <string name="ws_status_closed">WebSocket closed (%1$d): %2$s</string>
+    <string name="ws_status_failure">WebSocket error: %1$s</string>
+</resources>
