@@ -2,6 +2,8 @@ package com.llmperf.llmperf_apk.data.remote
 
 import com.llmperf.llmperf_apk.data.model.AndroidDevice
 import com.llmperf.llmperf_apk.data.model.RegisterDeviceRequest
+import com.llmperf.llmperf_apk.data.model.TestResultRequest
+import com.llmperf.llmperf_apk.data.model.TestResultResponse
 import com.llmperf.llmperf_apk.data.model.TokenRequest
 import com.llmperf.llmperf_apk.data.model.TokenResponse
 import retrofit2.Response
@@ -15,4 +17,7 @@ interface ApiService {
 
     @POST("auth/token")
     suspend fun issueToken(@Body request: TokenRequest): Response<TokenResponse>
+
+    @POST("test-results")
+    suspend fun postTestResult(@Body request: TestResultRequest): Response<TestResultResponse>
 }

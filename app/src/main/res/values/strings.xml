@@ -1,15 +1,53 @@
 <resources>
     <string name="app_name">LLMPerf-apk</string>
-    <string name="register_title">Register Device</string>
+    <string name="app_display_name">LLM Perf</string>
+    <string name="app_tagline">Network Test Agent</string>
+
+    <string name="card_device_title">Device</string>
+    <string name="card_current_test_title">Current Test</string>
+    <string name="card_ran_metrics_title">Device Info &amp; RAN Metrics</string>
+
     <string name="hint_device_name">Device name</string>
     <string name="action_register">Register this device</string>
+    <string name="device_info_format">Name: %1$s\nID: %2$s</string>
+
     <string name="status_idle">Idle</string>
     <string name="status_registering">Registering device…</string>
     <string name="status_fetching_token">Fetching auth token…</string>
     <string name="status_connected">Registered: %1$s</string>
     <string name="status_error">Error: %1$s</string>
-    <string name="ws_status_connecting">WebSocket: connecting…</string>
-    <string name="ws_status_connected">WebSocket: %1$s</string>
-    <string name="ws_status_closed">WebSocket closed (%1$d): %2$s</string>
-    <string name="ws_status_failure">WebSocket error: %1$s</string>
+
+    <string name="ws_pill_idle">Idle</string>
+    <string name="ws_pill_connecting">Connecting…</string>
+    <string name="ws_pill_connected">Connected</string>
+    <string name="ws_pill_reconnecting">Reconnecting…</string>
+
+    <string name="test_status_idle">No test run yet</string>
+    <string name="test_status_received">%1$s test received</string>
+    <string name="test_status_running">Running %1$s test…</string>
+    <string name="test_status_sent_success">%1$s test sent — success</string>
+    <string name="test_status_sent_failure">%1$s test sent — reported failure</string>
+    <string name="test_status_failed">%1$s test failed: %2$s</string>
+
+    <string name="test_type_device_info_ran">Device Info &amp; RAN</string>
+    <string name="test_type_icmp">ICMP</string>
+
+    <string name="ran_metrics_idle">Not read yet</string>
+    <string name="ran_metrics_loading">Reading…</string>
+    <string name="ran_metrics_permission_required">Permissions required (phone state + location)</string>
+    <string name="ran_metrics_error">Error: %1$s</string>
+
+    <string name="label_connection">Connection</string>
+    <string name="label_carrier">Carrier</string>
+    <string name="label_network_type">Network Type</string>
+    <string name="label_signal_level">Signal Level</string>
+    <string name="label_rsrp">RSRP</string>
+    <string name="label_rsrq">RSRQ</string>
+    <string name="label_snr">SNR</string>
+    <string name="label_enb">eNB</string>
+    <string name="label_ss_rsrp">SS RSRP</string>
+    <string name="label_ss_rsrq">SS RSRQ</string>
+    <string name="label_ss_sinr">SS SINR</string>
+
+    <string name="na">N/A</string>
 </resources>
