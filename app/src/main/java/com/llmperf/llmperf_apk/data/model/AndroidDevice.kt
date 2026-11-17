@@ -22,3 +22,11 @@ data class TokenResponse(
     val token: String,
     val expiresAt: String
 )
+
+data class DeviceMetrics(
+    val apkVersion: String?,
+    val clientIp: String?,
+//    val clientFqdn: String?,
+    val batteryTempC: Double?,
+    val cpuTempC: Double?
+)

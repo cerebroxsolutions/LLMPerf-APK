@@ -10,8 +10,10 @@ data class TestResultRequest(
     val targetHost: String?,
     // The device decides success/failure and, on failure, why — api-service just stores and returns it.
     val errorMessage: String?,
+    val deviceMetrics: DeviceMetrics?,
     val ranMetrics: RanMetrics?,
-    val icmpMetrics: IcmpMetrics?
+    val icmpMetrics: IcmpMetrics?,
+    val serverLocation: ServerLocation?
 )
 
 data class TestResultResponse(

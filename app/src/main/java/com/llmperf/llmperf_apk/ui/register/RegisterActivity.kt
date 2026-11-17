@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.llmperf.llmperf_apk.R
 import com.llmperf.llmperf_apk.data.local.DevicePrefs
+import com.llmperf.llmperf_apk.data.metrics.DeviceMetricsCollector
 import com.llmperf.llmperf_apk.data.metrics.IcmpPingTest
 import com.llmperf.llmperf_apk.data.metrics.RanMetricsCollector
 import com.llmperf.llmperf_apk.data.model.RanMetrics
@@ -42,6 +43,7 @@ class RegisterActivity : AppCompatActivity() {
             repository = DeviceRepository(RetrofitClient.apiService),
             webSocketManager = WebSocketManager(RetrofitClient.okHttpClient),
             ranMetricsCollector = RanMetricsCollector(applicationContext),
+            deviceMetricsCollector = DeviceMetricsCollector(applicationContext),
             icmpPingTest = IcmpPingTest()
         )
     }

@@ -1,5 +1,5 @@
 package com.llmperf.llmperf_apk.data.remote
-
+import com.llmperf.llmperf_apk.BuildConfig
 /**
  * Live deployed server (18.189.166.164). ICMP tests against this server also
  * need this to match SERVER_PEER_HOST on the server-observer deploy.
@@ -19,6 +19,10 @@ package com.llmperf.llmperf_apk.data.remote
  * alias for host localhost) — adb reverse doesn't apply there.
  */
 object ApiConfig {
+
+//    const val API_SERVICE_BASE_URL = "http://192.168.1.3:8080/"
+//    const val WEBSOCKET_URL = "ws://192.168.1.3:8081/ws/android"
+    const val GEOLOCATION_API_KEY = BuildConfig.GEOLOCATION_API_KEY
     const val API_SERVICE_BASE_URL = "http://18.189.166.164:8080/"
     const val WEBSOCKET_URL = "ws://18.189.166.164:8081/ws/android"
 }

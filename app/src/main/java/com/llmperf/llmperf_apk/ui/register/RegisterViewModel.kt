@@ -4,14 +4,19 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.llmperf.llmperf_apk.data.metrics.DeviceMetricsCollector
 import com.llmperf.llmperf_apk.data.metrics.IcmpPingTest
 import com.llmperf.llmperf_apk.data.metrics.RanMetricsCollector
 import com.llmperf.llmperf_apk.data.model.IcmpMetrics
+import com.llmperf.llmperf_apk.data.model.ServerLocation
 import com.llmperf.llmperf_apk.data.model.TokenResponse
+import com.llmperf.llmperf_apk.data.remote.ApiConfig
 import com.llmperf.llmperf_apk.data.repository.DeviceRepository
+import com.llmperf.llmperf_apk.utils.LocationHelper
 import com.llmperf.llmperf_apk.ws.RunTestCommand
 import com.llmperf.llmperf_apk.ws.WebSocketManager
 import com.llmperf.llmperf_apk.ws.WsConnectionState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +24,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.InetAddress
 
 /** Fixed retry interval for reconnecting a dropped WebSocket. */
 private const val RECONNECT_DELAY_MS = 10_000L
@@ -37,8 +44,11 @@ class RegisterViewModel(
     private val repository: DeviceRepository,
     private val webSocketManager: WebSocketManager,
     private val ranMetricsCollector: RanMetricsCollector,
-    private val icmpPingTest: IcmpPingTest
+    private val icmpPingTest: IcmpPingTest,
+    private val deviceMetricsCollector: DeviceMetricsCollector
 ) : ViewModel() {
+
+    private val locationHelper = LocationHelper()
 
     private val _state = MutableStateFlow<RegisterUiState>(RegisterUiState.Idle)
     val state: StateFlow<RegisterUiState> = _state.asStateFlow()
@@ -110,6 +120,13 @@ class RegisterViewModel(
         val metrics = withTimeoutOrNull(RAN_METRICS_WAIT_TIMEOUT_MS) {
             ranMetricsState.filterIsInstance<RanMetricsUiState.Success>().first().metrics
         }
+        val deviceMetrics = try {
+            deviceMetricsCollector.collect()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to collect device metrics", e)
+            null
+        }
+        Log.d("RegisterViewModel","Fetched device metrics: $deviceMetrics")
         val status = if (metrics != null) "success" else "failure"
 
         Log.d(TAG, "sending the results for testId=$testId (status=$status)")
@@ -119,7 +136,8 @@ class RegisterViewModel(
             status = status,
             testType = testType,
             triggerType = triggerType,
-            ranMetrics = metrics
+            ranMetrics = metrics,
+            deviceMetrics = deviceMetrics
         ).onSuccess {
             Log.d(TAG, "result sent for testId=$testId")
             _testExecutionState.value = TestExecutionUiState.Sent(testType, status)
@@ -169,6 +187,27 @@ class RegisterViewModel(
             null
         }
 
+        val serverLocation: ServerLocation? = try {
+            val serverIp = withContext(Dispatchers.IO) {
+                InetAddress.getByName(targetHost).hostAddress
+            }
+
+            if (serverIp.isNullOrBlank()) {
+                Log.e(TAG, "DNS lookup returned empty IP for targetHost=$targetHost")
+                null
+            } else {
+                Log.d(TAG, "Resolved server IP for $targetHost: $serverIp")
+
+                locationHelper.getGeolocationData(
+                    ip = serverIp,
+                    apiKey = ApiConfig.GEOLOCATION_API_KEY
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Server geolocation failed for testId=$testId", e)
+            null
+        }
+
         Log.d(TAG, "sending the results for testId=$testId (status=$status)")
         repository.postTestResult(
             testId = testId,
@@ -179,7 +218,8 @@ class RegisterViewModel(
             targetHost = targetHost,
             ranMetrics = ranMetrics,
             errorMessage = errorMessage,
-            icmpMetrics = metrics
+            icmpMetrics = metrics,
+            serverLocation = serverLocation
         ).onSuccess {
             Log.d(TAG, "result sent for testId=$testId")
             _testExecutionState.value = TestExecutionUiState.Sent("icmp", status)
@@ -294,11 +334,12 @@ class RegisterViewModel(
         private val repository: DeviceRepository,
         private val webSocketManager: WebSocketManager,
         private val ranMetricsCollector: RanMetricsCollector,
-        private val icmpPingTest: IcmpPingTest
+        private val icmpPingTest: IcmpPingTest,
+        private val deviceMetricsCollector: DeviceMetricsCollector
     ) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
-            return RegisterViewModel(repository, webSocketManager, ranMetricsCollector, icmpPingTest) as T
+            return RegisterViewModel(repository, webSocketManager, ranMetricsCollector, icmpPingTest,deviceMetricsCollector) as T
         }
     }
 }
