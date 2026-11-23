@@ -40,7 +40,31 @@ data class RunTestCommand(
     // Set only for test types that need a target (e.g. icmp) — null otherwise.
     val targetHost: String?,
     // Operator-configured ping count for icmp — null means "use the default".
-    val pingCount: Int?
+    val pingCount: Int?,
+    // Console username that started a manual run — null for scheduled runs.
+    val triggeredBy: String? = null,
+    // hls_streaming config — null for other test types.
+    val hls: HlsTestConfig? = null
+)
+
+/**
+ * hls_streaming settings from run_test. websocket-service has already
+ * validated them (http(s) URL, timeout 1–3600s, adaptive flag present);
+ * [resolution] is only set when [adaptive] is true.
+ */
+data class HlsTestConfig(
+    val url: String,
+    val timeoutSec: Int,
+    val adaptive: Boolean,
+    val resolution: String?,
+    // Fixed mode only: the variant BANDWIDTH/1000 the operator picked —
+    // playback locks to the track at (or just under) this bitrate.
+    val fixedBitrateKbps: Double? = null,
+    // Landscape fullscreen (Exfo-GenAI's HLS behavior): switch after
+    // fullscreenDelaySec, return after fullscreenDurationSec (0 = until
+    // playback ends). Null delay = stay in the normal card view.
+    val fullscreenDelaySec: Int? = null,
+    val fullscreenDurationSec: Int = 0
 )
 
 /**
@@ -96,8 +120,10 @@ class WebSocketManager(private val okHttpClient: OkHttpClient) {
                     val triggerType = json.optString("triggerType")
                     val targetHost = json.optString("targetHost").ifBlank { null }
                     val pingCount = if (json.has("pingCount")) json.optInt("pingCount") else null
-                    Log.d(TAG, "run_test message received over socket (testId=$testId, testType=$testType, triggerType=$triggerType, targetHost=$targetHost, pingCount=$pingCount)")
-                    _runTestCommands.tryEmit(RunTestCommand(testId, testType, triggerType, targetHost, pingCount))
+                    val triggeredBy = json.optString("triggeredBy").ifBlank { null }
+                    val hls = parseHlsConfig(json)
+                    Log.d(TAG, "run_test message received over socket (testId=$testId, testType=$testType, triggerType=$triggerType, triggeredBy=$triggeredBy, targetHost=$targetHost, pingCount=$pingCount, hls=$hls)")
+                    _runTestCommands.tryEmit(RunTestCommand(testId, testType, triggerType, targetHost, pingCount, triggeredBy, hls))
                     return
                 }
 
@@ -120,6 +146,20 @@ class WebSocketManager(private val okHttpClient: OkHttpClient) {
                 _state.value = WsConnectionState.Failure(t.message ?: "unknown error")
             }
         })
+    }
+
+    /** Null when run_test carries no hlsUrl (i.e. any non-HLS test). */
+    private fun parseHlsConfig(json: JSONObject): HlsTestConfig? {
+        val url = json.optString("hlsUrl").ifBlank { return null }
+        return HlsTestConfig(
+            url = url,
+            timeoutSec = json.optInt("hlsTimeoutSec", 0),
+            adaptive = json.optBoolean("hlsAdaptive", false),
+            resolution = json.optString("hlsResolution").ifBlank { null },
+            fixedBitrateKbps = if (json.has("fixedBitrateKbps")) json.optDouble("fixedBitrateKbps").takeIf { it > 0 } else null,
+            fullscreenDelaySec = if (json.has("hlsFullscreenDelaySec")) json.optInt("hlsFullscreenDelaySec").takeIf { it >= 0 } else null,
+            fullscreenDurationSec = json.optInt("hlsFullscreenDurationSec", 0).coerceAtLeast(0)
+        )
     }
 
     private fun startHeartbeat(webSocket: WebSocket) {

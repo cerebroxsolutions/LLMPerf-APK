@@ -31,6 +31,7 @@
 
     <string name="test_type_device_info_ran">Device Info &amp; RAN</string>
     <string name="test_type_icmp">ICMP</string>
+    <string name="test_type_hls_streaming">HLS Streaming</string>
 
     <string name="ran_metrics_idle">Not read yet</string>
     <string name="ran_metrics_loading">Reading…</string>

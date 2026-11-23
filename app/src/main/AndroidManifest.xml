@@ -32,6 +32,7 @@
 
         <activity
             android:name=".ui.register.RegisterActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false" />
 
     </application>

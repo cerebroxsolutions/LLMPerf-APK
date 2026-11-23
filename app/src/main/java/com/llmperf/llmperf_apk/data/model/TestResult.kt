@@ -8,11 +8,14 @@ data class TestResultRequest(
     val triggerType: String,
     // Operator-chosen icmp target, echoed back from the run_test command — null for test types that don't need one.
     val targetHost: String?,
+    // Console username echoed back from run_test's triggeredBy — null for scheduled runs.
+    val triggeredBy: String?,
     // The device decides success/failure and, on failure, why — api-service just stores and returns it.
     val errorMessage: String?,
     val deviceMetrics: DeviceMetrics?,
     val ranMetrics: RanMetrics?,
     val icmpMetrics: IcmpMetrics?,
+    val hlsMetrics: HlsMetrics?,
     val serverLocation: ServerLocation?
 )
 

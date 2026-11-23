@@ -20,9 +20,9 @@ import com.llmperf.llmperf_apk.BuildConfig
  */
 object ApiConfig {
 
-//    const val API_SERVICE_BASE_URL = "http://192.168.1.3:8080/"
-//    const val WEBSOCKET_URL = "ws://192.168.1.3:8081/ws/android"
+    const val API_SERVICE_BASE_URL = "http://192.168.1.3:8080/"
+    const val WEBSOCKET_URL = "ws://192.168.1.3:8081/ws/android"
     const val GEOLOCATION_API_KEY = BuildConfig.GEOLOCATION_API_KEY
-    const val API_SERVICE_BASE_URL = "http://18.189.166.164:8080/"
-    const val WEBSOCKET_URL = "ws://18.189.166.164:8081/ws/android"
+//    const val API_SERVICE_BASE_URL = "http://18.189.166.164:8080/"
+//    const val WEBSOCKET_URL = "ws://18.189.166.164:8081/ws/android"
 }

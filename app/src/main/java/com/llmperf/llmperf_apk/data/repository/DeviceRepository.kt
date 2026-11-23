@@ -3,6 +3,7 @@ package com.llmperf.llmperf_apk.data.repository
 import android.util.Log
 import com.llmperf.llmperf_apk.data.model.AndroidDevice
 import com.llmperf.llmperf_apk.data.model.DeviceMetrics
+import com.llmperf.llmperf_apk.data.model.HlsMetrics
 import com.llmperf.llmperf_apk.data.model.IcmpMetrics
 import com.llmperf.llmperf_apk.data.model.RanMetrics
 import com.llmperf.llmperf_apk.data.model.RegisterDeviceRequest
@@ -30,15 +31,21 @@ class DeviceRepository(private val apiService: ApiService) {
         testType: String,
         triggerType: String,
         targetHost: String? = null,
+        triggeredBy: String? = null,
         errorMessage: String? = null,
         deviceMetrics: DeviceMetrics? = null,
         ranMetrics: RanMetrics? = null,
         icmpMetrics: IcmpMetrics? = null,
+        hlsMetrics: HlsMetrics? = null,
         serverLocation: ServerLocation? = null
     ): Result<TestResultResponse> =
         safeCall {
+            Log.d("DeviceRepository","TriggeredBy : $triggeredBy")
             apiService.postTestResult(
-                TestResultRequest(testId, deviceId, status, testType, triggerType, targetHost, errorMessage, deviceMetrics, ranMetrics, icmpMetrics, serverLocation)
+                TestResultRequest(
+                    testId, deviceId, status, testType, triggerType, targetHost, triggeredBy, errorMessage,
+                    deviceMetrics, ranMetrics, icmpMetrics, hlsMetrics, serverLocation
+                )
             )
         }
 

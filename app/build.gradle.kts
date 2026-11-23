@@ -84,6 +84,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.netmonster.core)
     implementation(libs.play.services.location)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+<ScrollView
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/background"
@@ -192,6 +196,16 @@
                     android:indeterminateTint="@color/primary"
                     android:visibility="gone" />
 
+                <!-- HLS test playback surface. ExoPlayer renders here while an
+                     hls_streaming test runs; without a surface it would skip
+                     frames and FPS/dropped-frame metrics would be meaningless. -->
+                <TextureView
+                    android:id="@+id/hlsVideoView"
+                    android:layout_width="match_parent"
+                    android:layout_height="180dp"
+                    android:layout_marginTop="12dp"
+                    android:visibility="gone" />
+
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -257,3 +271,20 @@
 
     </LinearLayout>
 </ScrollView>
+
+<!-- Landscape fullscreen HLS playback (hls_streaming fullscreen timer).
+     The player is moved onto this surface while fullscreen is on. -->
+<FrameLayout
+    android:id="@+id/hlsFullscreenContainer"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:visibility="gone">
+
+    <TextureView
+        android:id="@+id/hlsFullscreenVideoView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</FrameLayout>
+
+</FrameLayout>

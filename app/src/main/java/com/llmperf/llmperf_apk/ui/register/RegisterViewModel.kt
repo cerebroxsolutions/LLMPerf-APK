@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.llmperf.llmperf_apk.data.metrics.DeviceMetricsCollector
+import com.llmperf.llmperf_apk.data.metrics.HlsPlaybackTest
 import com.llmperf.llmperf_apk.data.metrics.IcmpPingTest
 import com.llmperf.llmperf_apk.data.metrics.RanMetricsCollector
+import com.llmperf.llmperf_apk.data.model.HlsMetrics
 import com.llmperf.llmperf_apk.data.model.IcmpMetrics
 import com.llmperf.llmperf_apk.data.model.ServerLocation
 import com.llmperf.llmperf_apk.data.model.TokenResponse
@@ -16,7 +18,10 @@ import com.llmperf.llmperf_apk.utils.LocationHelper
 import com.llmperf.llmperf_apk.ws.RunTestCommand
 import com.llmperf.llmperf_apk.ws.WebSocketManager
 import com.llmperf.llmperf_apk.ws.WsConnectionState
+import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,6 +32,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.InetAddress
+import java.net.URI
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Fixed retry interval for reconnecting a dropped WebSocket. */
 private const val RECONNECT_DELAY_MS = 10_000L
@@ -40,13 +50,32 @@ private const val TOKEN_RETRY_MAX_DELAY_MS = 600_000L
 
 private const val TAG = "RegisterViewModel"
 
+/** Pings sent to the stream host alongside HLS playback (transport RTT probe). */
+private const val HLS_TRANSPORT_PING_COUNT = 8
+
 class RegisterViewModel(
     private val repository: DeviceRepository,
     private val webSocketManager: WebSocketManager,
     private val ranMetricsCollector: RanMetricsCollector,
     private val icmpPingTest: IcmpPingTest,
-    private val deviceMetricsCollector: DeviceMetricsCollector
+    private val deviceMetricsCollector: DeviceMetricsCollector,
+    private val hlsPlaybackTest: HlsPlaybackTest
 ) : ViewModel() {
+
+    /** The live HLS test player, for the activity to attach a video surface to; null when idle. */
+    val hlsPlayer: StateFlow<ExoPlayer?> = hlsPlaybackTest.player
+
+    /** True while the running HLS test wants landscape fullscreen playback. */
+    private val _hlsFullscreen = MutableStateFlow(false)
+    val hlsFullscreen: StateFlow<Boolean> = _hlsFullscreen.asStateFlow()
+
+    /**
+     * One ExoPlayer playback at a time. Scoped to HLS only (not a global
+     * test lock) because scheduled icmp runs are re-dispatched every few
+     * seconds and routinely overlap — a global lock would flood the results
+     * table with busy failures.
+     */
+    private val hlsTestRunning = AtomicBoolean(false)
 
     private val locationHelper = LocationHelper()
 
@@ -96,15 +125,19 @@ class RegisterViewModel(
      */
     private fun handleRunTest(command: RunTestCommand) {
         val deviceId = currentDeviceId ?: return
-        val (testId, testType, triggerType, targetHost, pingCount) = command
-        Log.d(TAG, "test is received (testId=$testId, testType=$testType, triggerType=$triggerType, targetHost=$targetHost, pingCount=$pingCount)")
+        val (testId, testType, triggerType, targetHost, pingCount, triggeredBy) = command
+        Log.d(TAG, "test is received (testId=$testId, testType=$testType, triggerType=$triggerType, triggeredBy=$triggeredBy, targetHost=$targetHost, pingCount=$pingCount)")
         Log.d(TAG, "starting test (testId=$testId)")
-        _testExecutionState.value = TestExecutionUiState.Received(testType)
+        // A busy HLS rejection must not overwrite the running HLS test's card.
+        if (!(testType == "hls_streaming" && hlsTestRunning.get())) {
+            _testExecutionState.value = TestExecutionUiState.Received(testType)
+        }
 
         viewModelScope.launch {
             when (testType) {
-                "icmp" -> handleIcmpTest(testId, deviceId, triggerType, targetHost, pingCount)
-                else -> handleDeviceInfoRanTest(testId, deviceId, testType, triggerType)
+                "icmp" -> handleIcmpTest(testId, deviceId, triggerType, triggeredBy, targetHost, pingCount)
+                "hls_streaming" -> handleHlsStreamingTest(command, deviceId)
+                else -> handleDeviceInfoRanTest(testId, deviceId, testType, triggerType, triggeredBy)
             }
         }
     }
@@ -115,7 +148,7 @@ class RegisterViewModel(
      * already fresh) for up to [RAN_METRICS_WAIT_TIMEOUT_MS], then posts a
      * success or failure result.
      */
-    private suspend fun handleDeviceInfoRanTest(testId: String, deviceId: String, testType: String, triggerType: String) {
+    private suspend fun handleDeviceInfoRanTest(testId: String, deviceId: String, testType: String, triggerType: String, triggeredBy: String?) {
         _testExecutionState.value = TestExecutionUiState.Running(testType)
         val metrics = withTimeoutOrNull(RAN_METRICS_WAIT_TIMEOUT_MS) {
             ranMetricsState.filterIsInstance<RanMetricsUiState.Success>().first().metrics
@@ -136,6 +169,7 @@ class RegisterViewModel(
             status = status,
             testType = testType,
             triggerType = triggerType,
+            triggeredBy = triggeredBy,
             ranMetrics = metrics,
             deviceMetrics = deviceMetrics
         ).onSuccess {
@@ -147,8 +181,172 @@ class RegisterViewModel(
         }
     }
 
+    /**
+     * Plays the stream for up to hls.timeoutSec while pinging its host for
+     * transport RTT, then posts an hls_streaming result. Any reason the test
+     * can't run (bad config, another HLS test already playing) is posted as
+     * a failure with an errorMessage rather than dropped silently.
+     */
+    private suspend fun handleHlsStreamingTest(command: RunTestCommand, deviceId: String) {
+        val testId = command.testId
+        val hls = command.hls
+        if (hls == null || hls.timeoutSec <= 0) {
+            Log.e(TAG, "hls_streaming run_test missing hlsUrl/hlsTimeoutSec for testId=$testId")
+            _testExecutionState.value = TestExecutionUiState.Failed("hls_streaming", "missing HLS stream settings")
+            postHlsFailure(command, deviceId, "Missing HLS stream settings (hlsUrl/hlsTimeoutSec)")
+            return
+        }
+        if (!hlsTestRunning.compareAndSet(false, true)) {
+            // The scheduler re-dispatches every few seconds for the whole
+            // window, so overlap is expected there: skip quietly and the
+            // next tick after this playback ends starts the next run. A
+            // manual run is a deliberate request, so it gets a failure row.
+            if (command.triggerType == "scheduled") {
+                Log.d(TAG, "hls_streaming testId=$testId skipped: scheduled dispatch arrived mid-playback")
+                return
+            }
+            Log.w(TAG, "hls_streaming testId=$testId rejected: another HLS test is running")
+            postHlsFailure(command, deviceId, "Device busy: another HLS test is already running")
+            return
+        }
+
+        try {
+            _testExecutionState.value = TestExecutionUiState.Running("hls_streaming")
+            val host = runCatching { URI(hls.url).host }.getOrNull()
+
+            val (outcome, transport, serverLocation) = coroutineScope {
+                val pingStartAt = isoNow()
+                val ping = async {
+                    if (host == null) null else try {
+                        icmpPingTest.run(host, HLS_TRANSPORT_PING_COUNT)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "transport ping to $host failed for testId=$testId", e)
+                        null
+                    }
+                }
+                val location = async { resolveServerLocation(host, testId) }
+                val fullscreen = hls.fullscreenDelaySec?.let { delaySec -> launch { runFullscreenTimer(delaySec, hls.fullscreenDurationSec) } }
+                val playback = hlsPlaybackTest.run(hls)
+                // Playback ended (timeout, stream end, or error): leave fullscreen now.
+                fullscreen?.cancel()
+                _hlsFullscreen.value = false
+                Triple(playback, ping.await()?.let { pingStartAt to it }, location.await())
+            }
+
+            val metrics = transport?.let { (startAt, icmp) ->
+                outcome.metrics.copy(
+                    transportPingStartAt = startAt,
+                    transportPingCount = icmp.packetsSent,
+                    transportRttAvgMs = icmp.latencyAvgMs,
+                    transportRttMinMs = icmp.latencyMinMs,
+                    transportRttMaxMs = icmp.latencyMaxMs,
+                    transportRttP50Ms = icmp.latencyP50Ms,
+                    transportRttP90Ms = icmp.latencyP90Ms,
+                    transportRttJitterMs = icmp.jitterMs
+                )
+            } ?: outcome.metrics
+
+            postHlsResult(command, deviceId, metrics, outcome.errorMessage, serverLocation)
+        } catch (e: Exception) {
+            Log.e(TAG, "hls_streaming testId=$testId crashed", e)
+            postHlsFailure(command, deviceId, "HLS test failed to run: ${e.message ?: e.javaClass.simpleName}")
+        } finally {
+            _hlsFullscreen.value = false
+            hlsTestRunning.set(false)
+        }
+    }
+
+    /**
+     * Same timing as Exfo-GenAI's HLS player: go fullscreen after [delaySec],
+     * come back after [durationSec] (0 = stay until playback ends, when the
+     * caller cancels this and resets the flag).
+     */
+    private suspend fun runFullscreenTimer(delaySec: Int, durationSec: Int) {
+        delay(delaySec * 1000L)
+        Log.d(TAG, "hls fullscreen on (after ${delaySec}s, for ${if (durationSec > 0) "${durationSec}s" else "rest of playback"})")
+        _hlsFullscreen.value = true
+        if (durationSec > 0) {
+            delay(durationSec * 1000L)
+            Log.d(TAG, "hls fullscreen off after ${durationSec}s")
+            _hlsFullscreen.value = false
+        }
+    }
+
+    private suspend fun postHlsFailure(command: RunTestCommand, deviceId: String, errorMessage: String) =
+        postHlsResult(command, deviceId, metrics = null, errorMessage = errorMessage, serverLocation = null)
+
+    private suspend fun postHlsResult(
+        command: RunTestCommand,
+        deviceId: String,
+        metrics: HlsMetrics?,
+        errorMessage: String?,
+        serverLocation: ServerLocation?
+    ) {
+        val testId = command.testId
+        val busy = errorMessage?.startsWith("Device busy") == true
+        val status = if (errorMessage == null) "success" else "failure"
+        if (errorMessage != null) Log.e(TAG, "testId=$testId marked failure: $errorMessage")
+
+        // Collected after playback so the row shows the network the device was on during the test.
+        val ranMetrics = try {
+            ranMetricsCollector.collect()
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to collect RAN metrics after hls test for testId=$testId", e)
+            null
+        }
+        val deviceMetrics = try {
+            deviceMetricsCollector.collect()
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to collect device metrics after hls test for testId=$testId", e)
+            null
+        }
+
+        Log.d(TAG, "sending the results for testId=$testId (status=$status)")
+        repository.postTestResult(
+            testId = testId,
+            deviceId = deviceId,
+            status = status,
+            testType = "hls_streaming",
+            triggerType = command.triggerType,
+            triggeredBy = command.triggeredBy,
+            errorMessage = errorMessage,
+            deviceMetrics = deviceMetrics,
+            ranMetrics = ranMetrics,
+            hlsMetrics = metrics,
+            serverLocation = serverLocation
+        ).onSuccess {
+            Log.d(TAG, "result sent for testId=$testId")
+            // A busy rejection leaves the running test's card alone.
+            if (!busy) _testExecutionState.value = TestExecutionUiState.Sent("hls_streaming", status)
+        }.onFailure {
+            Log.e(TAG, "failed to post test result for $testId", it)
+            if (!busy) _testExecutionState.value = TestExecutionUiState.Failed("hls_streaming", it.message ?: "failed to reach server")
+        }
+    }
+
+    /** DNS-resolves [host] and geolocates its IP; null on any failure. */
+    private suspend fun resolveServerLocation(host: String?, testId: String): ServerLocation? {
+        if (host.isNullOrBlank()) return null
+        return try {
+            val serverIp = withContext(Dispatchers.IO) { InetAddress.getByName(host).hostAddress }
+            if (serverIp.isNullOrBlank()) {
+                Log.e(TAG, "DNS lookup returned empty IP for host=$host")
+                null
+            } else {
+                Log.d(TAG, "Resolved server IP for $host: $serverIp")
+                locationHelper.getGeolocationData(ip = serverIp, apiKey = ApiConfig.GEOLOCATION_API_KEY)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Server geolocation failed for testId=$testId", e)
+            null
+        }
+    }
+
+    /** ISO-8601 with offset, the shape api-service's time.Time decoding expects. */
+    private fun isoNow(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.US).format(Date())
+
     /** Runs a burst of ICMP pings against targetHost and posts the resulting stats. */
-    private suspend fun handleIcmpTest(testId: String, deviceId: String, triggerType: String, targetHost: String?, pingCount: Int?) {
+    private suspend fun handleIcmpTest(testId: String, deviceId: String, triggerType: String, triggeredBy: String?, targetHost: String?, pingCount: Int?) {
         if (targetHost.isNullOrBlank()) {
             Log.e(TAG, "icmp run_test missing targetHost, discarding testId=$testId")
             _testExecutionState.value = TestExecutionUiState.Failed("icmp", "missing target host")
@@ -187,26 +385,7 @@ class RegisterViewModel(
             null
         }
 
-        val serverLocation: ServerLocation? = try {
-            val serverIp = withContext(Dispatchers.IO) {
-                InetAddress.getByName(targetHost).hostAddress
-            }
-
-            if (serverIp.isNullOrBlank()) {
-                Log.e(TAG, "DNS lookup returned empty IP for targetHost=$targetHost")
-                null
-            } else {
-                Log.d(TAG, "Resolved server IP for $targetHost: $serverIp")
-
-                locationHelper.getGeolocationData(
-                    ip = serverIp,
-                    apiKey = ApiConfig.GEOLOCATION_API_KEY
-                )
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Server geolocation failed for testId=$testId", e)
-            null
-        }
+        val serverLocation = resolveServerLocation(targetHost, testId)
 
         Log.d(TAG, "sending the results for testId=$testId (status=$status)")
         repository.postTestResult(
@@ -215,6 +394,7 @@ class RegisterViewModel(
             status = status,
             testType = "icmp",
             triggerType = triggerType,
+            triggeredBy = triggeredBy,
             targetHost = targetHost,
             ranMetrics = ranMetrics,
             errorMessage = errorMessage,
@@ -335,11 +515,12 @@ class RegisterViewModel(
         private val webSocketManager: WebSocketManager,
         private val ranMetricsCollector: RanMetricsCollector,
         private val icmpPingTest: IcmpPingTest,
-        private val deviceMetricsCollector: DeviceMetricsCollector
+        private val deviceMetricsCollector: DeviceMetricsCollector,
+        private val hlsPlaybackTest: HlsPlaybackTest
     ) : ViewModelProvider.Factory {
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             @Suppress("UNCHECKED_CAST")
-            return RegisterViewModel(repository, webSocketManager, ranMetricsCollector, icmpPingTest,deviceMetricsCollector) as T
+            return RegisterViewModel(repository, webSocketManager, ranMetricsCollector, icmpPingTest, deviceMetricsCollector, hlsPlaybackTest) as T
         }
     }
 }

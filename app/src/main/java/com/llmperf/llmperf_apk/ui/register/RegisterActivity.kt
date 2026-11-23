@@ -1,21 +1,28 @@
 package com.llmperf.llmperf_apk.ui.register
 
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.view.TextureView
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.exoplayer.ExoPlayer
 import com.llmperf.llmperf_apk.R
 import com.llmperf.llmperf_apk.data.local.DevicePrefs
 import com.llmperf.llmperf_apk.data.metrics.DeviceMetricsCollector
+import com.llmperf.llmperf_apk.data.metrics.HlsPlaybackTest
 import com.llmperf.llmperf_apk.data.metrics.IcmpPingTest
 import com.llmperf.llmperf_apk.data.metrics.RanMetricsCollector
 import com.llmperf.llmperf_apk.data.model.RanMetrics
@@ -25,6 +32,7 @@ import com.llmperf.llmperf_apk.databinding.ActivityRegisterBinding
 import com.llmperf.llmperf_apk.ws.WebSocketManager
 import com.llmperf.llmperf_apk.ws.WsConnectionState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -44,9 +52,17 @@ class RegisterActivity : AppCompatActivity() {
             webSocketManager = WebSocketManager(RetrofitClient.okHttpClient),
             ranMetricsCollector = RanMetricsCollector(applicationContext),
             deviceMetricsCollector = DeviceMetricsCollector(applicationContext),
-            icmpPingTest = IcmpPingTest()
+            icmpPingTest = IcmpPingTest(),
+            hlsPlaybackTest = HlsPlaybackTest(applicationContext)
         )
     }
+
+    /** Player currently rendering, and the surface it renders into, so it can be detached on destroy. */
+    private var boundHlsPlayer: ExoPlayer? = null
+    private var boundHlsSurface: TextureView? = null
+
+    /** Whether landscape fullscreen is currently applied to the window. */
+    private var landscapeApplied = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -92,6 +108,14 @@ class RegisterActivity : AppCompatActivity() {
             }
         }
 
+        // Collected for the activity's whole life (not just STARTED) so the
+        // player stays bound while briefly backgrounded; ExoPlayer itself
+        // tracks the TextureView's surface coming and going.
+        lifecycleScope.launch {
+            combine(viewModel.hlsPlayer, viewModel.hlsFullscreen) { player, fullscreen -> player to fullscreen }
+                .collect { (player, fullscreen) -> renderHlsPlayback(player, fullscreen) }
+        }
+
         val allGranted = RanMetricsCollector.REQUIRED_PERMISSIONS.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
@@ -116,6 +140,55 @@ class RegisterActivity : AppCompatActivity() {
             binding.btnRegister.visibility = View.GONE
             viewModel.connectExisting(savedId, savedName)
         }
+    }
+
+    /**
+     * Puts the live HLS player on the card's small surface, or — while the
+     * test's fullscreen timer is on — the full-window landscape surface.
+     * ExoPlayer switches surfaces mid-playback without restarting.
+     */
+    private fun renderHlsPlayback(player: ExoPlayer?, fullscreen: Boolean) {
+        val surface = if (fullscreen) binding.hlsFullscreenVideoView else binding.hlsVideoView
+        if (player != null) {
+            // A released player has already dropped its surface callbacks,
+            // so only a still-live, different player needs detaching.
+            boundHlsPlayer?.takeIf { it !== player }?.let { old -> boundHlsSurface?.let(old::clearVideoTextureView) }
+            if (player !== boundHlsPlayer || surface !== boundHlsSurface) player.setVideoTextureView(surface)
+        }
+        boundHlsPlayer = player
+        boundHlsSurface = if (player != null) surface else null
+
+        val showFullscreen = player != null && fullscreen
+        binding.hlsVideoView.visibility = if (player != null && !fullscreen) View.VISIBLE else View.GONE
+        binding.hlsFullscreenContainer.visibility = if (showFullscreen) View.VISIBLE else View.GONE
+        // Screen-off playback would skew FPS/dropped-frame metrics.
+        binding.root.keepScreenOn = player != null
+        applyLandscape(showFullscreen)
+    }
+
+    /** Landscape + hidden system bars on; restores the app's normal orientation off. */
+    private fun applyLandscape(on: Boolean) {
+        if (on == landscapeApplied) return
+        landscapeApplied = on
+        requestedOrientation =
+            if (on) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        WindowCompat.setDecorFitsSystemWindows(window, !on)
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        if (on) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onDestroy() {
+        // The player lives in the ViewModel and may outlive this activity —
+        // detach so it doesn't hold this view hierarchy.
+        boundHlsSurface?.let { surface -> boundHlsPlayer?.clearVideoTextureView(surface) }
+        boundHlsPlayer = null
+        boundHlsSurface = null
+        super.onDestroy()
     }
 
     private fun bindMetricLabels() {
@@ -234,6 +307,7 @@ class RegisterActivity : AppCompatActivity() {
 
     private fun testTypeLabel(testType: String): String = when (testType) {
         "icmp" -> getString(R.string.test_type_icmp)
+        "hls_streaming" -> getString(R.string.test_type_hls_streaming)
         "device_info_ran" -> getString(R.string.test_type_device_info_ran)
         else -> testType
     }
